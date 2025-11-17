@@ -1,0 +1,4 @@
+*.json
+.streamlit/
+__pycache__/
+*.pyc
