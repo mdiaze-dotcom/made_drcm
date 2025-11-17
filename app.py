@@ -39,11 +39,13 @@ df = pd.DataFrame(data)
 def parse_fecha(fecha_str):
     if fecha_str is None or str(fecha_str).strip() == "":
         return None
+
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
         try:
             return datetime.strptime(str(fecha_str), fmt)
         except:
             pass
+
     return None
 
 df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
@@ -65,30 +67,37 @@ df["Días restantes"] = df.apply(
 )
 
 # ---------------------------------------------------------
-# 4.1 Guardar automáticamente todos los días restantes recalculados
+# 4.1 Guardar automáticamente todos los días restantes recalculados (PARCHE)
 # ---------------------------------------------------------
-def fmt_datetime(x):
+def fmt_datetime_for_sheet(x):
     if isinstance(x, datetime):
         return x.strftime("%d/%m/%Y %H:%M:%S")
     return ""
 
-def fmt_days(x):
+def fmt_days_for_sheet(x):
     try:
-        return int(float(str(x)))
+        val = int(float(x))
+        return str(val)
     except:
         return ""
 
 df_auto = df.copy()
-df_auto["Fecha de Expediente"] = df_auto["Fecha de Expediente"].apply(fmt_datetime)
-df_auto["Fecha Pase DRCM"] = df_auto["Fecha Pase DRCM"].apply(fmt_datetime)
-df_auto["Días restantes"] = df_auto["Días restantes"].apply(fmt_days)
+df_auto["Fecha de Expediente"] = df_auto["Fecha de Expediente"].apply(fmt_datetime_for_sheet)
+df_auto["Fecha Pase DRCM"] = df_auto["Fecha Pase DRCM"].apply(fmt_datetime_for_sheet)
+df_auto["Días restantes"] = df_auto["Días restantes"].apply(fmt_days_for_sheet)
 
 header = worksheet.row_values(1)
 header = [c for c in header if c in df_auto.columns]
 
-values = df_auto[header].values.tolist()
+values_df = df_auto[header].fillna("").astype(str)
+values = values_df.values.tolist()
+
 end_col = chr(64 + len(header))
-worksheet.update(f"A2:{end_col}{df_auto.shape[0] + 1}", values)
+worksheet.update(
+    f"A2:{end_col}{df_auto.shape[0] + 1}",
+    values,
+    value_input_option='USER_ENTERED'
+)
 
 # ---------------------------------------------------------
 # 4.2 Aplicar colores automáticamente
@@ -96,7 +105,7 @@ worksheet.update(f"A2:{end_col}{df_auto.shape[0] + 1}", values)
 def aplicar_colores(worksheet, df_full):
     num_rows = df_full.shape[0]
     start_row = 2
-    col_index = 4  # Días Restantes = columna D
+    col_index = 4  # Columna D
 
     sheet_id = worksheet._properties.get("sheetId")
     requests = []
@@ -125,11 +134,7 @@ def aplicar_colores(worksheet, df_full):
                     "startColumnIndex": col_index - 1,
                     "endColumnIndex": col_index
                 },
-                "cell": {
-                    "userEnteredFormat": {
-                        "backgroundColor": color
-                    }
-                },
+                "cell": {"userEnteredFormat": {"backgroundColor": color}},
                 "fields": "userEnteredFormat.backgroundColor"
             }
         })
@@ -192,7 +197,6 @@ st.subheader("Expedientes pendientes")
 def safe_default_date(fp):
     if fp is None:
         return date.today()
-
     try:
         if pd.isna(fp):
             return date.today()
@@ -243,12 +247,18 @@ for idx, row in df_filtrado.iterrows():
             df.at[idx, "Días restantes"] = dias
 
             df_write = df.copy()
-            df_write["Fecha de Expediente"] = df_write["Fecha de Expediente"].apply(fmt_datetime)
-            df_write["Fecha Pase DRCM"] = df_write["Fecha Pase DRCM"].apply(fmt_datetime)
-            df_write["Días restantes"] = df_write["Días restantes"].apply(fmt_days)
+            df_write["Fecha de Expediente"] = df_write["Fecha de Expediente"].apply(fmt_datetime_for_sheet)
+            df_write["Fecha Pase DRCM"] = df_write["Fecha Pase DRCM"].apply(fmt_datetime_for_sheet)
+            df_write["Días restantes"] = df_write["Días restantes"].apply(fmt_days_for_sheet)
 
-            values = df_write[header].values.tolist()
-            worksheet.update(f"A2:{end_col}{df_write.shape[0] + 1}", values)
+            values_write_df = df_write[header].fillna("").astype(str)
+            values_write = values_write_df.values.tolist()
+
+            worksheet.update(
+                f"A2:{end_col}{df_write.shape[0] + 1}",
+                values_write,
+                value_input_option='USER_ENTERED'
+            )
 
             aplicar_colores(worksheet, df_write)
 
