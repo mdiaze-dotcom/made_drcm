@@ -34,41 +34,109 @@ data = worksheet.get_all_records()
 df = pd.DataFrame(data)
 
 # ---------------------------------------------------------
-# 3. Funciones seguras para manejar fechas
+# 3. Manejo seguro de fechas
 # ---------------------------------------------------------
 def parse_fecha(fecha_str):
-    if fecha_str is None:
+    if fecha_str is None or str(fecha_str).strip() == "":
         return None
-    if str(fecha_str).strip() == "":
-        return None
-
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
         try:
             return datetime.strptime(str(fecha_str), fmt)
         except:
             pass
-
     return None
 
 df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
 df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(parse_fecha)
 
 # ---------------------------------------------------------
-# 4. Cálculo de días restantes (PARCHE)
+# 4. Calcular Días Restantes (PARCHE COMPLETO)
 # ---------------------------------------------------------
 def compute_days(fecha_exp, fecha_pase):
     if fecha_exp is None:
         return ""
-    # Si no hay fecha pase → usar hoy()
     if fecha_pase is None:
         return (datetime.today() - fecha_exp).days
     return (fecha_pase - fecha_exp).days
 
-# Recalcular para TODOS los expedientes al iniciar
 df["Días restantes"] = df.apply(
     lambda r: compute_days(r["Fecha de Expediente"], r["Fecha Pase DRCM"]),
     axis=1
 )
+
+# ---------------------------------------------------------
+# 4.1 Guardar automáticamente todos los días restantes recalculados
+# ---------------------------------------------------------
+def fmt_datetime(x):
+    if isinstance(x, datetime):
+        return x.strftime("%d/%m/%Y %H:%M:%S")
+    return ""
+
+def fmt_days(x):
+    try:
+        return int(float(str(x)))
+    except:
+        return ""
+
+df_auto = df.copy()
+df_auto["Fecha de Expediente"] = df_auto["Fecha de Expediente"].apply(fmt_datetime)
+df_auto["Fecha Pase DRCM"] = df_auto["Fecha Pase DRCM"].apply(fmt_datetime)
+df_auto["Días restantes"] = df_auto["Días restantes"].apply(fmt_days)
+
+header = worksheet.row_values(1)
+header = [c for c in header if c in df_auto.columns]
+
+values = df_auto[header].values.tolist()
+end_col = chr(64 + len(header))
+worksheet.update(f"A2:{end_col}{df_auto.shape[0] + 1}", values)
+
+# ---------------------------------------------------------
+# 4.2 Aplicar colores automáticamente
+# ---------------------------------------------------------
+def aplicar_colores(worksheet, df_full):
+    num_rows = df_full.shape[0]
+    start_row = 2
+    col_index = 4  # Días Restantes = columna D
+
+    sheet_id = worksheet._properties.get("sheetId")
+    requests = []
+
+    for i in range(num_rows):
+        raw = df_full.iloc[i]["Días restantes"]
+
+        try:
+            val = int(float(str(raw)))
+        except:
+            color = {"red": 1, "green": 1, "blue": 1}
+        else:
+            if val >= 6:
+                color = {"red": 1, "green": 0.2, "blue": 0.2}
+            elif 4 <= val <= 5:
+                color = {"red": 1, "green": 1, "blue": 0.2}
+            else:
+                color = {"red": 0.2, "green": 1, "blue": 0.2}
+
+        requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": start_row - 1 + i,
+                    "endRowIndex": start_row + i,
+                    "startColumnIndex": col_index - 1,
+                    "endColumnIndex": col_index
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": color
+                    }
+                },
+                "fields": "userEnteredFormat.backgroundColor"
+            }
+        })
+
+    worksheet.spreadsheet.batch_update({"requests": requests})
+
+aplicar_colores(worksheet, df_auto)
 
 # ---------------------------------------------------------
 # 5. Selección de dependencia
@@ -119,7 +187,7 @@ if df_filtrado.empty:
 st.subheader("Expedientes pendientes")
 
 # ---------------------------------------------------------
-# 7. Función segura para preparar valor para st.date_input
+# 7. Valor seguro para st.date_input
 # ---------------------------------------------------------
 def safe_default_date(fp):
     if fp is None:
@@ -131,18 +199,15 @@ def safe_default_date(fp):
     except:
         pass
 
-    # pandas Timestamp
     if hasattr(fp, "to_pydatetime"):
         try:
             return fp.to_pydatetime().date()
         except:
             pass
 
-    # datetime puro
     if isinstance(fp, datetime):
         return fp.date()
 
-    # string → intentar parsear
     try:
         parsed = parse_fecha(fp)
         if parsed:
@@ -153,79 +218,7 @@ def safe_default_date(fp):
     return date.today()
 
 # ---------------------------------------------------------
-# 8. Colores condicionales
-# ---------------------------------------------------------
-def aplicar_colores(worksheet, df_full):
-    num_rows = df_full.shape[0]
-    start_row = 2
-    col_index = 4  # columna D
-
-    sheet_id = worksheet._properties.get("sheetId")
-    requests = []
-
-    for i in range(num_rows):
-        raw = df_full.iloc[i]["Días restantes"]
-
-        try:
-            val = int(float(str(raw).replace(",", ".")))
-        except:
-            color = {"red": 1, "green": 1, "blue": 1}
-        else:
-            if val >= 6:
-                color = {"red": 1, "green": 0.2, "blue": 0.2}
-            elif 4 <= val <= 5:
-                color = {"red": 1, "green": 1, "blue": 0.2}
-            else:
-                color = {"red": 0.2, "green": 1, "blue": 0.2}
-
-        requests.append({
-            "repeatCell": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "startRowIndex": start_row - 1 + i,
-                    "endRowIndex": start_row + i,
-                    "startColumnIndex": col_index - 1,
-                    "endColumnIndex": col_index
-                },
-                "cell": {"userEnteredFormat": {"backgroundColor": color}},
-                "fields": "userEnteredFormat.backgroundColor"
-            }
-        })
-
-    if requests:
-        worksheet.spreadsheet.batch_update({"requests": requests})
-
-# ---------------------------------------------------------
-# 9. Formateo antes de escribir
-# ---------------------------------------------------------
-def fmt(x):
-    if x is None:
-        return ""
-    if isinstance(x, float) and pd.isna(x):
-        return ""
-    if str(x).upper() in ("NONE", "NAT", ""):
-        return ""
-
-    if isinstance(x, datetime):
-        return x.strftime("%d/%m/%Y %H:%M:%S")
-
-    try:
-        f = parse_fecha(x)
-        if f:
-            return f.strftime("%d/%m/%Y %H:%M:%S")
-    except:
-        pass
-
-    return ""
-
-def fmt_days(x):
-    try:
-        return int(float(str(x).replace(",", ".")))
-    except:
-        return ""
-
-# ---------------------------------------------------------
-# 10. Interfaz principal
+# 8. Interfaz principal
 # ---------------------------------------------------------
 for idx, row in df_filtrado.iterrows():
     with st.expander(f"Expediente {row['Número de Expediente']}"):
@@ -240,8 +233,8 @@ for idx, row in df_filtrado.iterrows():
         )
 
         nueva_fecha_dt = datetime.combine(fecha_pase, datetime.min.time())
-
         dias = compute_days(row["Fecha de Expediente"], nueva_fecha_dt)
+
         st.write(f"Días restantes: {dias}")
 
         if st.button("Guardar", key=f"save_{idx}"):
@@ -250,15 +243,11 @@ for idx, row in df_filtrado.iterrows():
             df.at[idx, "Días restantes"] = dias
 
             df_write = df.copy()
-            df_write["Fecha de Expediente"] = df_write["Fecha de Expediente"].apply(fmt)
-            df_write["Fecha Pase DRCM"] = df_write["Fecha Pase DRCM"].apply(fmt)
+            df_write["Fecha de Expediente"] = df_write["Fecha de Expediente"].apply(fmt_datetime)
+            df_write["Fecha Pase DRCM"] = df_write["Fecha Pase DRCM"].apply(fmt_datetime)
             df_write["Días restantes"] = df_write["Días restantes"].apply(fmt_days)
 
-            header = worksheet.row_values(1)
-            header = [c for c in header if c in df_write.columns]
-
             values = df_write[header].values.tolist()
-            end_col = chr(64 + len(header))
             worksheet.update(f"A2:{end_col}{df_write.shape[0] + 1}", values)
 
             aplicar_colores(worksheet, df_write)
