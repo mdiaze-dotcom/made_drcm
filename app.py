@@ -31,28 +31,26 @@ worksheet = sh.worksheet(SHEET_NAME)
 data = worksheet.get_all_records()
 df = pd.DataFrame(data)
 
-# ---------------------------
-# 2. Normalizar nombres y tipos
-# ---------------------------
+# ---------------------------------------------------
+# 2. Conversión robusta de fechas
+# ---------------------------------------------------
 def parse_fecha(fecha_str):
-    """Convierte fechas dd/mm/yyyy o dd/mm/yyyy HH:MM:SS a objeto datetime."""
-    if not fecha_str:
+    """Convierte texto a datetime manejando días/meses correctamente."""
+    if not fecha_str or str(fecha_str).strip() == "":
         return None
-    try:
-        return datetime.strptime(fecha_str, "%d/%m/%Y %H:%M:%S")
-    except:
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
         try:
-            return datetime.strptime(fecha_str, "%d/%m/%Y")
+            return datetime.strptime(str(fecha_str), fmt)
         except:
-            return None
+            pass
+    return None
 
-# Convertir fechas
 df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
 df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(parse_fecha)
 
-# ---------------------------
-# 3. Selección de dependencia
-# ---------------------------
+# ---------------------------------------------------
+# 3. Selección de dependencia y clave
+# ---------------------------------------------------
 dependencias = sorted(df["Dependencia"].dropna().unique())
 sede_seleccionada = st.sidebar.selectbox("Seleccione Dependencia", dependencias)
 
@@ -74,9 +72,9 @@ if clave_ingresada != CLAVES[sede_seleccionada]:
 
 st.success(f"Acceso autorizado para {sede_seleccionada}")
 
-# ---------------------------
+# ---------------------------------------------------
 # 4. Filtrar expedientes pendientes
-# ---------------------------
+# ---------------------------------------------------
 df_filtrado = df[
     (df["Dependencia"].str.strip().str.upper() == sede_seleccionada.strip().upper()) &
     (df["Estado Trámite"].str.strip().str.upper() == "PENDIENTE")
@@ -86,41 +84,55 @@ if df_filtrado.empty:
     st.info("No existen expedientes pendientes para esta dependencia.")
     st.stop()
 
-# ---------------------------
-# 5. Mostrar y actualizar registros
-# ---------------------------
+# ---------------------------------------------------
+# Función: calcular días restantes
+# ---------------------------------------------------
+def compute_days(fecha_exp, fecha_pase):
+    if fecha_exp is None:
+        return ""
+    if fecha_pase is None:
+        return (datetime.today() - fecha_exp).days
+    return (fecha_pase - fecha_exp).days
+
+# ---------------------------------------------------
+# 5. Mostrar y actualizar expedientes
+# ---------------------------------------------------
 st.subheader("Expedientes Pendientes")
 
 for idx, row in df_filtrado.iterrows():
     with st.expander(f"Expediente {row['Número de Expediente']}"):
+
+        # Manejo seguro de fechas vacías
+        if isinstance(row["Fecha Pase DRCM"], datetime):
+            default_fecha_pase = row["Fecha Pase DRCM"].date()
+        else:
+            default_fecha_pase = date.today()
+
         fecha_pase = st.date_input(
             "Fecha Pase DRCM",
-            value=row["Fecha Pase DRCM"].date() if isinstance(row["Fecha Pase DRCM"], datetime) else date.today(),
+            value=default_fecha_pase,
             key=f"fecha_{idx}"
         )
 
+        # Calcular días restantes (vista previa)
+        dias_prev = compute_days(row["Fecha de Expediente"], 
+                                 datetime.combine(fecha_pase, datetime.min.time()))
+        st.write(f"Días restantes calculados: {dias_prev}")
+
         if st.button("Guardar", key=f"guardar_{idx}"):
 
-            # Convertir a datetime
             nueva_fecha_dt = datetime.combine(fecha_pase, datetime.min.time())
 
-            # Actualizar en DF
+            # Actualizar dataframe
             df.at[idx, "Fecha Pase DRCM"] = nueva_fecha_dt
+            df.at[idx, "Días restantes"] = compute_days(row["Fecha de Expediente"], nueva_fecha_dt)
 
-            # Recalcular días restantes
-            fecha_exp = row["Fecha de Expediente"]
+            # Convertir para escritura
+            df_to_write = df.astype(str)
 
-            if fecha_exp:
-                df.at[idx, "Días restantes"] = (nueva_fecha_dt - fecha_exp).days
-            else:
-                df.at[idx, "Días restantes"] = ""
-
-            # ---------------------------
-            # 6. ESCRIBIR EN GOOGLE SHEETS
-            # ---------------------------
-            valores = df.astype(str).values.tolist()
-            worksheet.update(f"A2:{chr(64 + df.shape[1])}{df.shape[0] + 1}", valores)
+            worksheet.update(
+                f"A2:{chr(64 + df.shape[1])}{df.shape[0] + 1}",
+                df_to_write.values.tolist()
+            )
 
             st.success(f"Expediente {row['Número de Expediente']} actualizado correctamente.")
-
-
