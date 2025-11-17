@@ -28,13 +28,13 @@ sh = gc.open_by_key(SHEET_ID)
 worksheet = sh.worksheet(SHEET_NAME)
 
 # ---------------------------------------------------------
-# 2. Leer datos iniciales
+# 2. Leer datos
 # ---------------------------------------------------------
 data = worksheet.get_all_records()
 df = pd.DataFrame(data)
 
 # ---------------------------------------------------------
-# 3. Funciones seguras para manejo de fechas
+# 3. Funciones para parsear fechas
 # ---------------------------------------------------------
 def parse_fecha(fecha_str):
     if not fecha_str or str(fecha_str).strip() == "":
@@ -50,7 +50,18 @@ df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
 df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(parse_fecha)
 
 # ---------------------------------------------------------
-# 4. Cálculo de días restantes
+# 4. NORMALIZAR TODAS LAS FECHAS PARA QUE NO HAYA NaT
+# ---------------------------------------------------------
+def clean_dt(x):
+    if isinstance(x, datetime):
+        return x
+    return None
+
+df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(clean_dt)
+df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(clean_dt)
+
+# ---------------------------------------------------------
+# 5. Calcular días restantes
 # ---------------------------------------------------------
 def compute_days(fecha_exp, fecha_pase):
     if fecha_exp is None:
@@ -65,7 +76,7 @@ df["Días restantes"] = df.apply(
 )
 
 # ---------------------------------------------------------
-# 5. Selección de dependencia + claves
+# 6. Selección de dependencia + claves
 # ---------------------------------------------------------
 dependencias = sorted(df["Dependencia"].dropna().unique())
 sede_seleccionada = st.sidebar.selectbox("Seleccione la dependencia", dependencias)
@@ -78,6 +89,7 @@ CLAVES = {
     "CUSCO": "CUSCO2025",
     "CHICLAYO": "CHICLAYO2025",
     "PIURA": "PIURA2025",
+    "PUNO": "PUNO2025",
     "TUMBES": "TUMBES2025",
     "TACNA": "TACNA2025",
     "PUCALLPA": "PUCALLPA2025",
@@ -98,7 +110,7 @@ if clave_ingresada != CLAVES[sede_seleccionada]:
 st.success(f"Acceso autorizado para {sede_seleccionada}")
 
 # ---------------------------------------------------------
-# 6. Filtrar expedientes pendientes
+# 7. Filtrar pendientes
 # ---------------------------------------------------------
 df_filtrado = df[
     (df["Dependencia"].str.upper().str.strip() == sede_seleccionada.upper().strip()) &
@@ -106,18 +118,18 @@ df_filtrado = df[
 ]
 
 if df_filtrado.empty:
-    st.info("No existen expedientes pendientes en esta sede.")
+    st.info("No existen expedientes pendientes.")
     st.stop()
 
 st.subheader("Expedientes pendientes")
 
 # ---------------------------------------------------------
-# 7. Colorear Google Sheets según días restantes
+# 8. Colorear en Google Sheets
 # ---------------------------------------------------------
 def aplicar_colores(worksheet, df_full):
     num_rows = df_full.shape[0]
     start_row = 2
-    col_index = 4  # Días restantes está en la columna D
+    col_index = 4
 
     sheet_id = worksheet._properties.get("sheetId")
     requests = []
@@ -137,52 +149,32 @@ def aplicar_colores(worksheet, df_full):
             else:
                 color = {"red": 0.2, "green": 1, "blue": 0.2}
 
-        start_r = start_row - 1 + i
-        end_r = start_r + 1
-
-        start_c = col_index - 1
-        end_c = col_index
-
         requests.append({
             "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
-                    "startRowIndex": start_r,
-                    "endRowIndex": end_r,
-                    "startColumnIndex": start_c,
-                    "endColumnIndex": end_c
+                    "startRowIndex": start_row - 1 + i,
+                    "endRowIndex": start_row + i,
+                    "startColumnIndex": col_index - 1,
+                    "endColumnIndex": col_index
                 },
-                "cell": {
-                    "userEnteredFormat": {
-                        "backgroundColor": color
-                    }
-                },
+                "cell": {"userEnteredFormat": {"backgroundColor": color}},
                 "fields": "userEnteredFormat.backgroundColor"
             }
         })
 
-    if requests:
-        worksheet.spreadsheet.batch_update({"requests": requests})
+    worksheet.spreadsheet.batch_update({"requests": requests})
 
 # ---------------------------------------------------------
-# 8. Formateo estable de fechas y días antes de escribir
+# 9. Formateo de escritura
 # ---------------------------------------------------------
 def fmt(x):
     if x is None:
         return ""
-    if isinstance(x, float) and pd.isna(x):
-        return ""
-    if str(x).strip().upper() in ("NONE", "NAT", ""):
-        return ""
-
     if isinstance(x, datetime):
         return x.strftime("%d/%m/%Y %H:%M:%S")
-
-    try:
-        d = parse_fecha(x)
-        return d.strftime("%d/%m/%Y %H:%M:%S") if d else ""
-    except:
-        return ""
+    d = parse_fecha(x)
+    return d.strftime("%d/%m/%Y %H:%M:%S") if d else ""
 
 def fmt_days(x):
     try:
@@ -191,14 +183,16 @@ def fmt_days(x):
         return ""
 
 # ---------------------------------------------------------
-# 9. Interfaz principal
+# 10. INTERFAZ PRINCIPAL
 # ---------------------------------------------------------
 for idx, row in df_filtrado.iterrows():
     with st.expander(f"Expediente {row['Número de Expediente']}"):
 
-        fp = row["Fecha Pase DRCM"]
+        # Fecha Exp seguras
+        fecha_exp = row["Fecha de Expediente"]
 
-        # Fecha Pase segura (NUNCA produce error)
+        # Fecha Pase DRCM seguras
+        fp = row["Fecha Pase DRCM"]
         if isinstance(fp, datetime):
             default_fecha = fp.date()
         else:
@@ -210,17 +204,13 @@ for idx, row in df_filtrado.iterrows():
             key=f"fp_{idx}"
         )
 
-        dias_prev = compute_days(
-            row["Fecha de Expediente"],
-            datetime.combine(fecha_pase, datetime.min.time())
-        )
-
+        dias_prev = compute_days(fecha_exp, datetime.combine(fecha_pase, datetime.min.time()))
         st.write(f"Días restantes: {dias_prev}")
 
         if st.button("Guardar", key=f"save_{idx}"):
 
-            nueva_fecha_dt = datetime.combine(fecha_pase, datetime.min.time())
-            df.at[idx, "Fecha Pase DRCM"] = nueva_fecha_dt
+            nueva_fecha = datetime.combine(fecha_pase, datetime.min.time())
+            df.at[idx, "Fecha Pase DRCM"] = nueva_fecha
             df.at[idx, "Días restantes"] = dias_prev
 
             df_write = df.copy()
