@@ -1,139 +1,126 @@
-# app.py
-# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date, time
-from google.oauth2.service_account import Credentials
 import gspread
-from gspread.utils import rowcol_to_a1
+from google.oauth2.service_account import Credentials
+from datetime import datetime, date
 
-st.set_page_config(page_title="BD_Expedientes_DRCM", layout="wide")
-st.title("📋 Actualización de Expedientes - DRCM")
+st.set_page_config(page_title="Actualización DRCM", layout="wide")
 
-SHEET_ID = "1mDeXDyKTZjNmRK8TnSByKbm3ny_RFhT4Rvjpqwekvjg"
-SHEET_INDEX = 0
-
-EXPECTED_COLS = [
-    "Número de Expediente",
-    "Dependencia",
-    "Fecha de Expediente",
-    "Días restantes",
-    "Tipo de Proceso",
-    "Tipo de Calidad Migratoria",
-    "Fecha Inicio de Etapa",
-    "Fecha Fin de Etapa",
-    "Estado de Trámite",
-    "Fecha Pase DRCM"
+# ---------------------------
+# 1. Conexión a Google Sheets
+# ---------------------------
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
 ]
 
-def get_gs_client():
-    scope = ["https://www.googleapis.com/auth/spreadsheets",
-             "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
-    return gspread.authorize(creds)
+credentials = Credentials.from_service_account_info(
+    st.secrets["gcp_service_account"],
+    scopes=scope
+)
 
-@st.cache_data(ttl=30)
-def load_sheet():
-    client = get_gs_client()
-    sh = client.open_by_key(SHEET_ID)
-    ws = sh.get_worksheet(SHEET_INDEX)
-    header = ws.row_values(1)
-    records = ws.get_all_records()
-    df = pd.DataFrame(records) if records else pd.DataFrame(columns=EXPECTED_COLS)
-    df.columns = [c.strip() for c in df.columns]
-    for c in EXPECTED_COLS:
-        if c not in df.columns:
-            df[c] = pd.NA
-    for col in ["Fecha de Expediente", "Fecha Inicio de Etapa", "Fecha Fin de Etapa", "Fecha Pase DRCM"]:
-        df[col] = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
-    return df, ws, header
+gc = gspread.authorize(credentials)
 
-def compute_days(fecha_expediente, fecha_pase):
-    if pd.isna(fecha_expediente):
+SHEET_ID = "1mDeXDyKTZjNmRK8TnSByKbm3ny_RFhT4Rvjpqwekvjg"
+SHEET_NAME = "Hoja 1"
+
+sh = gc.open_by_key(SHEET_ID)
+worksheet = sh.worksheet(SHEET_NAME)
+
+# Leer datos
+data = worksheet.get_all_records()
+df = pd.DataFrame(data)
+
+# ---------------------------
+# 2. Normalizar nombres y tipos
+# ---------------------------
+def parse_fecha(fecha_str):
+    """Convierte fechas dd/mm/yyyy o dd/mm/yyyy HH:MM:SS a objeto datetime."""
+    if not fecha_str:
         return None
-    ref = pd.to_datetime(date.today()) if pd.isna(fecha_pase) else pd.to_datetime(fecha_pase)
-    return int((ref.normalize() - fecha_expediente.normalize()).days)
+    try:
+        return datetime.strptime(fecha_str, "%d/%m/%Y %H:%M:%S")
+    except:
+        try:
+            return datetime.strptime(fecha_str, "%d/%m/%Y")
+        except:
+            return None
 
-df_all, ws_obj, header = load_sheet()
-dependencias = sorted(df_all["Dependencia"].dropna().unique().tolist())
+# Convertir fechas
+df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
+df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(parse_fecha)
 
-dep = st.selectbox("Seleccione la Dependencia:", ["-- Seleccione --"] + dependencias)
-if dep == "-- Seleccione --":
+# ---------------------------
+# 3. Selección de dependencia
+# ---------------------------
+dependencias = sorted(df["Dependencia"].dropna().unique())
+sede_seleccionada = st.sidebar.selectbox("Seleccione Dependencia", dependencias)
+
+clave_ingresada = st.sidebar.text_input("Ingrese clave de acceso", type="password")
+
+CLAVES = {
+    "LIMA": "LIMA2025",
+    "CALLAO": "CALLAO2025",
+    "AREQUIPA": "AREQUIPA2025"
+}
+
+if sede_seleccionada not in CLAVES:
+    st.error("No existe clave configurada para esta dependencia.")
     st.stop()
 
-clave = st.text_input("Clave (DEPENDENCIA + 2025):", type="password")
-if clave != dep.upper() + "2025":
-    st.warning("Clave incorrecta.")
+if clave_ingresada != CLAVES[sede_seleccionada]:
+    st.warning("Ingrese la clave correcta para continuar.")
     st.stop()
 
-st.success(f"Acceso concedido: {dep}")
+st.success(f"Acceso autorizado para {sede_seleccionada}")
 
-df_dep = df_all[(df_all["Dependencia"] == dep) &
-                (df_all["Estado de Trámite"].str.lower() == "pendiente")]
+# ---------------------------
+# 4. Filtrar expedientes pendientes
+# ---------------------------
+df_filtrado = df[
+    (df["Dependencia"].str.strip().str.upper() == sede_seleccionada.strip().upper()) &
+    (df["Estado Trámite"].str.strip().str.upper() == "PENDIENTE")
+]
 
-if df_dep.empty:
-    st.info("No hay expedientes pendientes.")
+if df_filtrado.empty:
+    st.info("No existen expedientes pendientes para esta dependencia.")
     st.stop()
 
-for idx, row in df_dep.iterrows():
-    cols = st.columns([2,1,1,1])
-    expediente = row["Número de Expediente"]
+# ---------------------------
+# 5. Mostrar y actualizar registros
+# ---------------------------
+st.subheader("Expedientes Pendientes")
 
-    with cols[0]:
-        st.markdown(f"### {expediente}")
-        fe = row["Fecha de Expediente"]
-        st.write("Fecha Expediente:", fe.strftime("%d/%m/%Y %H:%M:%S") if not pd.isna(fe) else "---")
+for idx, row in df_filtrado.iterrows():
+    with st.expander(f"Expediente {row['Número de Expediente']}"):
+        fecha_pase = st.date_input(
+            "Fecha Pase DRCM",
+            value=row["Fecha Pase DRCM"].date() if isinstance(row["Fecha Pase DRCM"], datetime) else date.today(),
+            key=f"fecha_{idx}"
+        )
 
-    with cols[1]:
-        fecha_pase = row["Fecha Pase DRCM"]
-        default_date = fecha_pase.date() if not pd.isna(fecha_pase) else date.today()
-        nueva_fecha = st.date_input("Fecha Pase DRCM", value=default_date, key=f"f_{idx}")
+        if st.button("Guardar", key=f"guardar_{idx}"):
 
-    with cols[2]:
-        dias = compute_days(row["Fecha de Expediente"], fecha_pase)
-        st.write(f"Días restantes: {dias if dias is not None else '---'}")
+            # Convertir a datetime
+            nueva_fecha_dt = datetime.combine(fecha_pase, datetime.min.time())
 
-    with cols[3]:
-        if st.button("Guardar", key=f"g_{idx}"):
+            # Actualizar en DF
+            df.at[idx, "Fecha Pase DRCM"] = nueva_fecha_dt
 
-            try:
-                client = get_gs_client()
-                sh = client.open_by_key(SHEET_ID)
-                ws_live = sh.get_worksheet(SHEET_INDEX)
+            # Recalcular días restantes
+            fecha_exp = row["Fecha de Expediente"]
 
-                header_live = ws_live.row_values(1)
-                if "Fecha Pase DRCM" not in header_live or "Días restantes" not in header_live:
-                    st.error("Las columnas no existen físicamente en la hoja.")
-                    continue
+            if fecha_exp:
+                df.at[idx, "Días restantes"] = (nueva_fecha_dt - fecha_exp).days
+            else:
+                df.at[idx, "Días restantes"] = ""
 
-                col_fecha = header_live.index("Fecha Pase DRCM") + 1
-                col_dias = header_live.index("Días restantes") + 1
+            # ---------------------------
+            # 6. ESCRIBIR EN GOOGLE SHEETS
+            # ---------------------------
+            valores = df.astype(str).values.tolist()
+            worksheet.update(f"A2:{chr(64 + df.shape[1])}{df.shape[0] + 1}", valores)
 
-                live_records = ws_live.get_all_records()
-                df_live = pd.DataFrame(live_records)
-                df_live.columns = [c.strip() for c in df_live.columns]
+            st.success(f"Expediente {row['Número de Expediente']} actualizado correctamente.")
 
-                matches = df_live.index[df_live["Número de Expediente"] == expediente].tolist()
-                if not matches:
-                    st.error("Expediente no encontrado.")
-                    continue
 
-                row_number = matches[0] + 2
-
-                fecha_dt = datetime.combine(nueva_fecha, time())
-                fecha_str = fecha_dt.strftime("%d/%m/%Y %H:%M:%S")
-
-                fecha_exp_td = pd.to_datetime(df_live.loc[matches[0], "Fecha de Expediente"], errors="coerce", dayfirst=True)
-                dias_calc = compute_days(fecha_exp_td, fecha_dt)
-                dias_val = int(dias_calc) if dias_calc is not None else ""
-
-                start = rowcol_to_a1(row_number, col_fecha)
-                end = rowcol_to_a1(row_number, col_dias)
-                ws_live.update(f"{start}:{end}", [[fecha_str, dias_val]], value_input_option='USER_ENTERED')
-
-                st.success(f"Actualizado correctamente: {expediente}")
-                st.cache_data.clear()
-
-            except Exception as e:
-                st.error("Error al actualizar Google Sheets.")
-                st.exception(e)
