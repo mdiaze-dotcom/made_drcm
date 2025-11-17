@@ -52,7 +52,7 @@ df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
 df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(parse_fecha)
 
 # ---------------------------------------------------------
-# 4. Calcular Días Restantes (PARCHE COMPLETO)
+# 4. Calcular Días Restantes
 # ---------------------------------------------------------
 def compute_days(fecha_exp, fecha_pase):
     if fecha_exp is None:
@@ -67,17 +67,22 @@ df["Días restantes"] = df.apply(
 )
 
 # ---------------------------------------------------------
-# 4.1 Guardar automáticamente todos los días restantes recalculados (PARCHE)
+# 4.1 Guardar días restantes calculados automáticamente (AL INICIO)
 # ---------------------------------------------------------
+
 def fmt_datetime_for_sheet(x):
     if isinstance(x, datetime):
         return x.strftime("%d/%m/%Y %H:%M:%S")
+    try:
+        if pd.isna(x):
+            return ""
+    except:
+        pass
     return ""
 
 def fmt_days_for_sheet(x):
     try:
-        val = int(float(x))
-        return str(val)
+        return str(int(float(x)))
     except:
         return ""
 
@@ -100,21 +105,20 @@ worksheet.update(
 )
 
 # ---------------------------------------------------------
-# 4.2 Aplicar colores automáticamente
+# 4.2 Aplicar colores
 # ---------------------------------------------------------
 def aplicar_colores(worksheet, df_full):
     num_rows = df_full.shape[0]
-    start_row = 2
-    col_index = 4  # Columna D
-
     sheet_id = worksheet._properties.get("sheetId")
     requests = []
+    start_row = 1
+    col_index = 3  # CERO-BASED: columna D
 
     for i in range(num_rows):
         raw = df_full.iloc[i]["Días restantes"]
 
         try:
-            val = int(float(str(raw)))
+            val = int(float(raw))
         except:
             color = {"red": 1, "green": 1, "blue": 1}
         else:
@@ -129,10 +133,10 @@ def aplicar_colores(worksheet, df_full):
             "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
-                    "startRowIndex": start_row - 1 + i,
-                    "endRowIndex": start_row + i,
-                    "startColumnIndex": col_index - 1,
-                    "endColumnIndex": col_index
+                    "startRowIndex": start_row + i,
+                    "endRowIndex": start_row + i + 1,
+                    "startColumnIndex": col_index,
+                    "endColumnIndex": col_index + 1
                 },
                 "cell": {"userEnteredFormat": {"backgroundColor": color}},
                 "fields": "userEnteredFormat.backgroundColor"
@@ -192,32 +196,24 @@ if df_filtrado.empty:
 st.subheader("Expedientes pendientes")
 
 # ---------------------------------------------------------
-# 7. Valor seguro para st.date_input
+# 7. Función para asegurar fecha válida en date_input
 # ---------------------------------------------------------
 def safe_default_date(fp):
     if fp is None:
         return date.today()
+
     try:
         if pd.isna(fp):
             return date.today()
     except:
         pass
 
-    if hasattr(fp, "to_pydatetime"):
-        try:
-            return fp.to_pydatetime().date()
-        except:
-            pass
-
     if isinstance(fp, datetime):
         return fp.date()
 
-    try:
-        parsed = parse_fecha(fp)
-        if parsed:
-            return parsed.date()
-    except:
-        pass
+    parsed = parse_fecha(fp)
+    if parsed:
+        return parsed.date()
 
     return date.today()
 
@@ -227,8 +223,7 @@ def safe_default_date(fp):
 for idx, row in df_filtrado.iterrows():
     with st.expander(f"Expediente {row['Número de Expediente']}"):
 
-        fp = row["Fecha Pase DRCM"]
-        default_fecha = safe_default_date(fp)
+        default_fecha = safe_default_date(row["Fecha Pase DRCM"])
 
         fecha_pase = st.date_input(
             "Fecha Pase DRCM",
