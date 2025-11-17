@@ -34,10 +34,9 @@ data = worksheet.get_all_records()
 df = pd.DataFrame(data)
 
 # ---------------------------------------------------------
-# 3. Funciones seguras para manejo de Fechas
+# 3. Funciones seguras para manejo de fechas
 # ---------------------------------------------------------
 def parse_fecha(fecha_str):
-    """Convierte string dd/mm/yyyy o dd/mm/yyyy HH:MM:SS a datetime."""
     if not fecha_str or str(fecha_str).strip() == "":
         return None
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
@@ -79,7 +78,6 @@ CLAVES = {
     "CUSCO": "CUSCO2025",
     "CHICLAYO": "CHICLAYO2025",
     "PIURA": "PIURA2025",
-    "PUNO": "PUNO2025",
     "TUMBES": "TUMBES2025",
     "TACNA": "TACNA2025",
     "PUCALLPA": "PUCALLPA2025",
@@ -114,12 +112,12 @@ if df_filtrado.empty:
 st.subheader("Expedientes pendientes")
 
 # ---------------------------------------------------------
-# 7. Función para colorear Google Sheets (Días restantes)
+# 7. Colorear Google Sheets según días restantes
 # ---------------------------------------------------------
 def aplicar_colores(worksheet, df_full):
     num_rows = df_full.shape[0]
-    start_row = 2  # datos empiezan en fila 2
-    col_index = 4  # D
+    start_row = 2
+    col_index = 4  # Días restantes está en la columna D
 
     sheet_id = worksheet._properties.get("sheetId")
     requests = []
@@ -130,7 +128,7 @@ def aplicar_colores(worksheet, df_full):
         try:
             val = int(float(str(raw).replace(",", ".")))
         except:
-            color = {"red": 1, "green": 1, "blue": 1}  # blanco
+            color = {"red": 1, "green": 1, "blue": 1}
         else:
             if val >= 6:
                 color = {"red": 1, "green": 0.2, "blue": 0.2}
@@ -141,6 +139,7 @@ def aplicar_colores(worksheet, df_full):
 
         start_r = start_row - 1 + i
         end_r = start_r + 1
+
         start_c = col_index - 1
         end_c = col_index
 
@@ -163,14 +162,10 @@ def aplicar_colores(worksheet, df_full):
         })
 
     if requests:
-        try:
-            worksheet.spreadsheet.batch_update({"requests": requests})
-        except Exception as e:
-            st.error("Error aplicando colores")
-            st.exception(e)
+        worksheet.spreadsheet.batch_update({"requests": requests})
 
 # ---------------------------------------------------------
-# 8. Función segura para formatear fechas antes de escribir
+# 8. Formateo estable de fechas y días antes de escribir
 # ---------------------------------------------------------
 def fmt(x):
     if x is None:
@@ -201,8 +196,11 @@ def fmt_days(x):
 for idx, row in df_filtrado.iterrows():
     with st.expander(f"Expediente {row['Número de Expediente']}"):
 
-        if isinstance(row["Fecha Pase DRCM"], datetime):
-            default_fecha = row["Fecha Pase DRCM"].date()
+        fp = row["Fecha Pase DRCM"]
+
+        # Fecha Pase segura (NUNCA produce error)
+        if isinstance(fp, datetime):
+            default_fecha = fp.date()
         else:
             default_fecha = date.today()
 
@@ -221,12 +219,10 @@ for idx, row in df_filtrado.iterrows():
 
         if st.button("Guardar", key=f"save_{idx}"):
 
-            # Actualizar en df
             nueva_fecha_dt = datetime.combine(fecha_pase, datetime.min.time())
             df.at[idx, "Fecha Pase DRCM"] = nueva_fecha_dt
             df.at[idx, "Días restantes"] = dias_prev
 
-            # Preparar escritura
             df_write = df.copy()
 
             df_write["Fecha de Expediente"] = df_write["Fecha de Expediente"].apply(fmt)
@@ -240,16 +236,11 @@ for idx, row in df_filtrado.iterrows():
             end_col = chr(64 + len(header))
             rango = f"A2:{end_col}{df_write.shape[0] + 1}"
 
-            try:
-                worksheet.update(rango, values, value_input_option="USER_ENTERED")
-            except Exception as e:
-                st.error("Error escribiendo en Google Sheets")
-                st.exception(e)
-                st.stop()
+            worksheet.update(rango, values, value_input_option="USER_ENTERED")
 
-            # Recargar
             new_data = worksheet.get_all_records()
             df = pd.DataFrame(new_data)
+
             df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
             df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(parse_fecha)
             df["Días restantes"] = df.apply(
@@ -260,6 +251,3 @@ for idx, row in df_filtrado.iterrows():
             aplicar_colores(worksheet, df)
 
             st.success(f"Expediente {row['Número de Expediente']} actualizado correctamente.")
-
-
-
