@@ -28,15 +28,16 @@ sh = gc.open_by_key(SHEET_ID)
 worksheet = sh.worksheet(SHEET_NAME)
 
 # ---------------------------------------------------------
-# 2. Leer datos
+# 2. Leer datos iniciales
 # ---------------------------------------------------------
 data = worksheet.get_all_records()
 df = pd.DataFrame(data)
 
 # ---------------------------------------------------------
-# 3. Función segura para parsear fechas
+# 3. Funciones seguras para manejo de Fechas
 # ---------------------------------------------------------
 def parse_fecha(fecha_str):
+    """Convierte string dd/mm/yyyy o dd/mm/yyyy HH:MM:SS a datetime."""
     if not fecha_str or str(fecha_str).strip() == "":
         return None
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
@@ -50,7 +51,7 @@ df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
 df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(parse_fecha)
 
 # ---------------------------------------------------------
-# 4. Función para calcular días restantes
+# 4. Cálculo de días restantes
 # ---------------------------------------------------------
 def compute_days(fecha_exp, fecha_pase):
     if fecha_exp is None:
@@ -113,12 +114,12 @@ if df_filtrado.empty:
 st.subheader("Expedientes pendientes")
 
 # ---------------------------------------------------------
-# 7. Función para colorear Google Sheets
+# 7. Función para colorear Google Sheets (Días restantes)
 # ---------------------------------------------------------
 def aplicar_colores(worksheet, df_full):
     num_rows = df_full.shape[0]
-    start_row = 2  # Datos empiezan en A2
-    col_index = 4  # Días restantes está en columna D
+    start_row = 2  # datos empiezan en fila 2
+    col_index = 4  # D
 
     sheet_id = worksheet._properties.get("sheetId")
     requests = []
@@ -129,15 +130,14 @@ def aplicar_colores(worksheet, df_full):
         try:
             val = int(float(str(raw).replace(",", ".")))
         except:
-            # Dejar blanco si no es numérico
-            color = {"red": 1, "green": 1, "blue": 1}
+            color = {"red": 1, "green": 1, "blue": 1}  # blanco
         else:
             if val >= 6:
-                color = {"red": 1, "green": 0.2, "blue": 0.2}  # rojo
+                color = {"red": 1, "green": 0.2, "blue": 0.2}
             elif 4 <= val <= 5:
-                color = {"red": 1, "green": 1, "blue": 0.2}  # amarillo
+                color = {"red": 1, "green": 1, "blue": 0.2}
             else:
-                color = {"red": 0.2, "green": 1, "blue": 0.2}  # verde
+                color = {"red": 0.2, "green": 1, "blue": 0.2}
 
         start_r = start_row - 1 + i
         end_r = start_r + 1
@@ -170,7 +170,33 @@ def aplicar_colores(worksheet, df_full):
             st.exception(e)
 
 # ---------------------------------------------------------
-# 8. INTERFAZ DE ACTUALIZACIÓN
+# 8. Función segura para formatear fechas antes de escribir
+# ---------------------------------------------------------
+def fmt(x):
+    if x is None:
+        return ""
+    if isinstance(x, float) and pd.isna(x):
+        return ""
+    if str(x).strip().upper() in ("NONE", "NAT", ""):
+        return ""
+
+    if isinstance(x, datetime):
+        return x.strftime("%d/%m/%Y %H:%M:%S")
+
+    try:
+        d = parse_fecha(x)
+        return d.strftime("%d/%m/%Y %H:%M:%S") if d else ""
+    except:
+        return ""
+
+def fmt_days(x):
+    try:
+        return int(float(str(x).replace(",", ".")))
+    except:
+        return ""
+
+# ---------------------------------------------------------
+# 9. Interfaz principal
 # ---------------------------------------------------------
 for idx, row in df_filtrado.iterrows():
     with st.expander(f"Expediente {row['Número de Expediente']}"):
@@ -186,7 +212,6 @@ for idx, row in df_filtrado.iterrows():
             key=f"fp_{idx}"
         )
 
-        # Previsualizar días
         dias_prev = compute_days(
             row["Fecha de Expediente"],
             datetime.combine(fecha_pase, datetime.min.time())
@@ -201,51 +226,30 @@ for idx, row in df_filtrado.iterrows():
             df.at[idx, "Fecha Pase DRCM"] = nueva_fecha_dt
             df.at[idx, "Días restantes"] = dias_prev
 
-            # ---- Dar formato antes de escribir ----
+            # Preparar escritura
             df_write = df.copy()
-
-            def fmt(x):
-                if isinstance(x, datetime):
-                    return x.strftime("%d/%m/%Y %H:%M:%S")
-                if x is None:
-                    return ""
-                try:
-                    d = parse_fecha(x)
-                    return d.strftime("%d/%m/%Y %H:%M:%S") if d else ""
-                except:
-                    return str(x)
 
             df_write["Fecha de Expediente"] = df_write["Fecha de Expediente"].apply(fmt)
             df_write["Fecha Pase DRCM"] = df_write["Fecha Pase DRCM"].apply(fmt)
-
-            # Asegurar días como enteros o vacío
-            def fmt_days(x):
-                try:
-                    return int(float(str(x).replace(",", ".")))
-                except:
-                    return ""
             df_write["Días restantes"] = df_write["Días restantes"].apply(fmt_days)
 
-            # Obtener orden real del header
             header = worksheet.row_values(1)
             header = [c for c in header if c in df_write.columns]
 
             values = df_write[header].values.tolist()
-
             end_col = chr(64 + len(header))
             rango = f"A2:{end_col}{df_write.shape[0] + 1}"
 
             try:
                 worksheet.update(rango, values, value_input_option="USER_ENTERED")
             except Exception as e:
-                st.error("Error actualizando Google Sheets")
+                st.error("Error escribiendo en Google Sheets")
                 st.exception(e)
                 st.stop()
 
-            # Recargar datos
+            # Recargar
             new_data = worksheet.get_all_records()
             df = pd.DataFrame(new_data)
-
             df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
             df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(parse_fecha)
             df["Días restantes"] = df.apply(
