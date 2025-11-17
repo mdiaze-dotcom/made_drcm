@@ -54,15 +54,17 @@ df["Fecha de Expediente"] = df["Fecha de Expediente"].apply(parse_fecha)
 df["Fecha Pase DRCM"] = df["Fecha Pase DRCM"].apply(parse_fecha)
 
 # ---------------------------------------------------------
-# 4. Cálculo de días restantes
+# 4. Cálculo de días restantes (PARCHE)
 # ---------------------------------------------------------
 def compute_days(fecha_exp, fecha_pase):
     if fecha_exp is None:
         return ""
+    # Si no hay fecha pase → usar hoy()
     if fecha_pase is None:
         return (datetime.today() - fecha_exp).days
     return (fecha_pase - fecha_exp).days
 
+# Recalcular para TODOS los expedientes al iniciar
 df["Días restantes"] = df.apply(
     lambda r: compute_days(r["Fecha de Expediente"], r["Fecha Pase DRCM"]),
     axis=1
@@ -117,30 +119,30 @@ if df_filtrado.empty:
 st.subheader("Expedientes pendientes")
 
 # ---------------------------------------------------------
-# 7. Función que asegura un valor válido para st.date_input
+# 7. Función segura para preparar valor para st.date_input
 # ---------------------------------------------------------
 def safe_default_date(fp):
-    # Si es None, string vacío, NaN, NA, NaT → devolver hoy
     if fp is None:
         return date.today()
+
     try:
         if pd.isna(fp):
             return date.today()
     except:
         pass
 
-    # Si es pandas Timestamp
+    # pandas Timestamp
     if hasattr(fp, "to_pydatetime"):
         try:
             return fp.to_pydatetime().date()
         except:
             pass
 
-    # Si es datetime nativo
+    # datetime puro
     if isinstance(fp, datetime):
         return fp.date()
 
-    # Si es string, intentar parsear
+    # string → intentar parsear
     try:
         parsed = parse_fecha(fp)
         if parsed:
@@ -148,7 +150,7 @@ def safe_default_date(fp):
     except:
         pass
 
-    return date.today()  # Fallback seguro
+    return date.today()
 
 # ---------------------------------------------------------
 # 8. Colores condicionales
@@ -194,7 +196,7 @@ def aplicar_colores(worksheet, df_full):
         worksheet.spreadsheet.batch_update({"requests": requests})
 
 # ---------------------------------------------------------
-# 9. Guardar cambios
+# 9. Formateo antes de escribir
 # ---------------------------------------------------------
 def fmt(x):
     if x is None:
@@ -238,6 +240,7 @@ for idx, row in df_filtrado.iterrows():
         )
 
         nueva_fecha_dt = datetime.combine(fecha_pase, datetime.min.time())
+
         dias = compute_days(row["Fecha de Expediente"], nueva_fecha_dt)
         st.write(f"Días restantes: {dias}")
 
@@ -261,5 +264,6 @@ for idx, row in df_filtrado.iterrows():
             aplicar_colores(worksheet, df_write)
 
             st.success(f"Expediente {row['Número de Expediente']} actualizado correctamente.")
+
 
 
