@@ -45,7 +45,7 @@ def is_nat(x):
     except:
         pass
     s = str(x).strip().upper()
-    return s in ("", "NONE", "NAT", "NAN")
+    return s in ("", "NONE", "NAN", "NAT")
 
 def try_parse_fecha(x):
     """Convierte a datetime o devuelve None sin fallar nunca."""
@@ -126,10 +126,8 @@ for col in ["Fecha de Expediente", "Fecha Pase DRCM",
     if col in df_write.columns:
         df_write[col] = df_write[col].apply(fmt_fecha_sheet)
 
-# días formateados
 df_write["Días restantes"] = df_write["Días restantes"].apply(fmt_days_sheet)
 
-# respetar encabezados reales
 header = worksheet.row_values(1)
 header = [h for h in header if h in df_write.columns]
 
@@ -143,13 +141,16 @@ worksheet.update(
 )
 
 # ---------------------------------------------------
-# 7. COLOREAR LA COLUMNA D
+# 7. APLICAR COLORES A COLUMNA D
 # ---------------------------------------------------
 def apply_colors(ws, dfc):
     sheet_id = ws._properties["sheetId"]
     requests = []
     col_idx = 3  # D = 3
-    for i, v in enumerate(dfc["Días restantes"].tolist()):
+
+    dias_list = dfc["Días restantes"].tolist()
+
+    for i, v in enumerate(dias_list):
         if is_nat(v):
             color = {"red": 1, "green": 1, "blue": 1}
         else:
@@ -174,16 +175,17 @@ def apply_colors(ws, dfc):
                 "fields": "userEnteredFormat.backgroundColor"
             }
         })
+
     if requests:
         ws.spreadsheet.batch_update({"requests": requests})
 
 apply_colors(worksheet, df_write)
 
 # ---------------------------------------------------
-# 8. SELECCIÓN DE DEPENDENCIA + CLAVE
+# 8. SELECCIÓN DE DEPENDENCIA Y CLAVE
 # ---------------------------------------------------
 dependencias = sorted(df["Dependencia"].dropna().unique())
-sede = st.sidebar.selectbox("Seleccione Dependencia", dependencias)
+sede = st.sidebar.selectbox("Seleccione dependencia", dependencias)
 
 CLAVES = {d: d.replace(" ", "").upper() + "2025" for d in dependencias}
 clave = st.sidebar.text_input("Clave de acceso", type="password")
@@ -193,15 +195,19 @@ if clave != CLAVES.get(sede, ""):
     st.stop()
 
 # ---------------------------------------------------
-# 9. FILTRAR PENDIENTES
+# 9. FILTRO FINAL (NUEVA REGLA)
 # ---------------------------------------------------
+def fecha_vacia(x):
+    return is_nat(x)
+
 df_pen = df[
     (df["Dependencia"].str.upper() == sede.upper()) &
-    (df["Estado Trámite"].str.upper() == "PENDIENTE")
+    (df["Estado Trámite"].str.upper() == "PENDIENTE") &
+    (df["Fecha Pase DRCM"].apply(fecha_vacia))  # ← NUEVA REGLA
 ]
 
 if df_pen.empty:
-    st.info("No hay pendientes.")
+    st.info("No hay expedientes pendientes.")
     st.stop()
 
 # ---------------------------------------------------
@@ -211,13 +217,13 @@ st.subheader("Expedientes pendientes")
 
 def safe_widget_date(x):
     x = try_parse_fecha(x)
-    if x is None:
-        return date.today()
-    return x.date()
+    return x.date() if x else date.today()
 
 for idx, row in df_pen.iterrows():
-    numero = row.get("Número de Expediente", "")
-    with st.expander(f"Expediente {numero}"):
+
+    num = row.get("Número de Expediente", "")
+    with st.expander(f"Expediente {num}"):
+
         default_date = safe_widget_date(row.get("Fecha Pase DRCM"))
 
         fecha_pase = st.date_input(
@@ -230,9 +236,11 @@ for idx, row in df_pen.iterrows():
             row.get("Fecha de Expediente"),
             datetime.combine(fecha_pase, time.min)
         )
+
         st.write(f"Días restantes: {dias_calc}")
 
         if st.button("Guardar", key=f"save_{idx}"):
+
             nueva = datetime.combine(fecha_pase, time.min)
             df.at[idx, "Fecha Pase DRCM"] = nueva
             df.at[idx, "Días restantes"] = compute_days_safe(
@@ -243,8 +251,7 @@ for idx, row in df_pen.iterrows():
 
             for col in ["Fecha de Expediente", "Fecha Pase DRCM",
                         "Fecha Inicio de Etapa", "Fecha Fin de Etapa"]:
-                if col in df2.columns:
-                    df2[col] = df2[col].apply(fmt_fecha_sheet)
+                df2[col] = df2[col].apply(fmt_fecha_sheet)
 
             df2["Días restantes"] = df2["Días restantes"].apply(fmt_days_sheet)
 
@@ -258,7 +265,7 @@ for idx, row in df_pen.iterrows():
 
             apply_colors(worksheet, df2)
 
-            st.success("Actualizado correctamente.")
+            st.success("Expediente actualizado correctamente.")
 
 
 
