@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 
-st.set_page_config(page_title="Actualización DRCM", layout="wide")
+st.set_page_config(page_title="Actualización DGTFM", layout="wide")
 
 # ---------------------------------------------------
 # 1. GOOGLE SHEETS CONNECTION
@@ -81,44 +81,50 @@ def fmt_days_sheet(x):
     except:
         return ""
 
-
 # ---------------------------------------------------
 # 4. NORMALIZAR FECHAS
 # ---------------------------------------------------
-for col in ["Fecha de Expediente", "Fecha Pase DRCM",
+for col in ["Fecha de Expediente", "Fecha Pase DGTFM",
             "Fecha Inicio de Etapa", "Fecha Fin de Etapa"]:
     if col in df.columns:
         df[col] = df[col].apply(try_parse_fecha)
 
 # ---------------------------------------------------
-# 5. CALCULAR DÍAS TRANS­CURRIDOS (FUNCIÓN CORREGIDA)
+# 5. CALCULAR DÍAS HÁBILES
 # ---------------------------------------------------
-def compute_days_safe(f_exp, f_pase):
-    fexp = try_parse_fecha(f_exp)
-    if fexp is None:
+def compute_business_days(start_date, end_date):
+    if start_date is None:
         return ""
 
-    # Asegurar que siempre use solo fecha
-    fexp = fexp.date()
+    start_date = start_date.date()
+    end_date = end_date.date()
 
-    # Si no hay fecha pase → hoy
-    if is_nat(f_pase):
-        return (date.today() - fexp).days
+    delta = (end_date - start_date).days
+    if delta < 0:
+        return 0
 
+    count = 0
+    for i in range(delta + 1):
+        d = start_date + timedelta(days=i)
+        if d.weekday() < 5:  # 0=lunes, 6=domingo
+            count += 1
+    return count - 1  # no contar el día inicial
+
+
+def compute_days_safe(f_exp, f_pase):
+    fe = try_parse_fecha(f_exp)
+    if fe is None:
+        return ""
     fp = try_parse_fecha(f_pase)
     if fp is None:
-        return (date.today() - fexp).days
-
-    # Convertir también a date
-    fp = fp.date()
-
-    # Diferencia final
-    return (fp - fexp).days
-
+        fp = datetime.combine(date.today(), time.min)
+    return compute_business_days(fe, fp)
 
 df["Días restantes"] = df.apply(
-    lambda r: compute_days_safe(r.get("Fecha de Expediente"),
-                                r.get("Fecha Pase DRCM")),
+    lambda r: compute_days_safe(
+        r.get("Fecha de Expediente"),
+        r.get("Fecha Pase DGTFM")
+    ),
     axis=1
 )
 
@@ -127,7 +133,7 @@ df["Días restantes"] = df.apply(
 # ---------------------------------------------------
 df_write = df.copy()
 
-for col in ["Fecha de Expediente", "Fecha Pase DRCM",
+for col in ["Fecha de Expediente", "Fecha Pase DGTFM",
             "Fecha Inicio de Etapa", "Fecha Fin de Etapa"]:
     if col in df_write.columns:
         df_write[col] = df_write[col].apply(fmt_fecha_sheet)
@@ -152,7 +158,7 @@ worksheet.update(
 def apply_colors(ws, dfc):
     sheet_id = ws._properties["sheetId"]
     requests = []
-    col_idx = 3
+    col_idx = 3  # D
 
     dias_list = dfc["Días restantes"].tolist()
 
@@ -185,7 +191,6 @@ def apply_colors(ws, dfc):
     if requests:
         ws.spreadsheet.batch_update({"requests": requests})
 
-
 apply_colors(worksheet, df_write)
 
 # ---------------------------------------------------
@@ -202,6 +207,20 @@ if clave != CLAVES.get(sede, ""):
     st.stop()
 
 # ---------------------------------------------------
+# TOOLTIP / MODAL
+# ---------------------------------------------------
+with st.sidebar.expander("ℹ️ ¿Cómo se cuentan los días hábiles?"):
+    st.markdown("""
+    **Regla aplicada:**
+    
+    - Solo se contabilizan **días hábiles (lunes a viernes)**  
+    - No se cuentan sábados  
+    - No se cuentan domingos  
+    - No se consideran feriados  
+    - El cálculo es solo por fecha (**dd/mm/yyyy**)  
+    """)
+
+# ---------------------------------------------------
 # 9. FILTRO FINAL
 # ---------------------------------------------------
 def fecha_vacia(x):
@@ -210,91 +229,72 @@ def fecha_vacia(x):
 df_pen = df[
     (df["Dependencia"].str.upper() == sede.upper()) &
     (df["Estado Trámite"].str.upper() == "PENDIENTE") &
-    (df["Fecha Pase DRCM"].apply(fecha_vacia))
+    (df["Fecha Pase DGTFM"].apply(fecha_vacia))
 ]
+
+# ---------------------------------------------------
+# 10. LEYENDA Y TOTALES
+# ---------------------------------------------------
+st.sidebar.markdown("### 🟩 Leyenda de colores")
+st.sidebar.markdown("""
+- 🟥 **Rojo:** 6 días o más  
+- 🟨 **Amarillo:** 4 a 5 días  
+- 🟩 **Verde:** 0 a 3 días  
+""")
+
+if not df_pen.empty:
+    c_rojo = sum(df_pen["Días restantes"] >= 6)
+    c_amar = sum((df_pen["Días restantes"] >= 4) & (df_pen["Días restantes"] <= 5))
+    c_verde = sum(df_pen["Días restantes"] <= 3)
+
+    st.sidebar.markdown("### 📊 Totales por color")
+    st.sidebar.write(f"🟥 Rojo: **{c_rojo}**")
+    st.sidebar.write(f"🟨 Amarillo: **{c_amar}**")
+    st.sidebar.write(f"🟩 Verde: **{c_verde}**")
 
 if df_pen.empty:
     st.info("No hay expedientes pendientes.")
     st.stop()
 
 # ---------------------------------------------------
-# 10. MOSTRAR Y ACTUALIZAR (CON TEXTO Y COLOR NUEVO)
+# 11. MOSTRAR Y ACTUALIZAR
 # ---------------------------------------------------
 st.subheader("Expedientes pendientes")
 
 def safe_widget_date(x):
-    dt = try_parse_fecha(x)
-    return dt.date() if dt else date.today()
+    x = try_parse_fecha(x)
+    return x.date() if x else date.today()
 
 for idx, row in df_pen.iterrows():
-
     num = row.get("Número de Expediente", "")
     with st.expander(f"Expediente {num}"):
 
-        # Mostrar fecha expediente
-        fecha_exp_txt = ""
-        fe = try_parse_fecha(row.get("Fecha de Expediente"))
-        if fe:
-            fecha_exp_txt = fe.strftime("%d/%m/%Y")
-        st.write(f"📌 **Fecha de Expediente:** {fecha_exp_txt}")
-
-        default_date = safe_widget_date(row.get("Fecha Pase DRCM"))
+        default_date = safe_widget_date(row.get("Fecha Pase DGTFM"))
 
         fecha_pase = st.date_input(
-            "Fecha Pase DRCM (no puede ser menor que hoy)",
+            "Fecha Pase DGTFM",
             value=default_date,
             key=f"fp_{idx}"
         )
-
-        if fecha_pase < date.today():
-            st.error("❌ La fecha no puede ser menor que hoy.")
-            continue
 
         dias_calc = compute_days_safe(
             row.get("Fecha de Expediente"),
             datetime.combine(fecha_pase, time.min)
         )
 
-        # Determinar color
-        if dias_calc == "" or dias_calc is None:
-            color_hex = "#FFFFFF"
-        else:
-            try:
-                v = int(dias_calc)
-                if v >= 6:
-                    color_hex = "#FF0000"
-                elif 4 <= v <= 5:
-                    color_hex = "#FFFF00"
-                else:
-                    color_hex = "#00FF00"
-            except:
-                color_hex = "#FFFFFF"
-
-        # Mostrar con estilo
-        st.markdown(
-            f"""
-            <div style="padding:8px; font-size:16px; 
-                        background-color:{color_hex};
-                        width: fit-content; 
-                        border-radius:5px;">
-                <strong>Días transcurridos desde la recepción del trámite:</strong> {dias_calc}
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        st.write(f"**Días transcurridos desde recepción:** {dias_calc}")
 
         if st.button("Guardar", key=f"save_{idx}"):
 
             nueva = datetime.combine(fecha_pase, time.min)
-
-            df.at[idx, "Fecha Pase DRCM"] = nueva
+            df.at[idx, "Fecha Pase DGTFM"] = nueva
             df.at[idx, "Días restantes"] = compute_days_safe(
                 row.get("Fecha de Expediente"), nueva
             )
 
             df2 = df.copy()
 
-            for col in ["Fecha de Expediente", "Fecha Pase DRCM",
+            for col in ["Fecha de Expediente", "Fecha Pase DGTFM",
                         "Fecha Inicio de Etapa", "Fecha Fin de Etapa"]:
                 df2[col] = df2[col].apply(fmt_fecha_sheet)
 
