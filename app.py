@@ -46,23 +46,26 @@ def is_nat(x):
     s = str(x).strip().upper()
     return s in ("", "NONE", "NAN", "NAT")
 
+
 def try_parse_fecha(x):
     if is_nat(x):
         return None
-    if isinstance(x, datetime):
-        return x
-    if isinstance(x, pd.Timestamp):
-        return x.to_pydatetime()
+    if isinstance(x, (datetime, pd.Timestamp)):
+        return x if isinstance(x, datetime) else x.to_pydatetime()
+
     s = str(x).strip()
+
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
         try:
             return datetime.strptime(s, fmt)
         except:
             pass
+
     try:
         return datetime.fromisoformat(s)
     except:
         return None
+
 
 def fmt_fecha_sheet(x):
     x = try_parse_fecha(x)
@@ -70,9 +73,12 @@ def fmt_fecha_sheet(x):
         return ""
     return x.strftime("%d/%m/%Y %H:%M:%S")
 
+
 def fmt_days_sheet(x):
+    if is_nat(x):
+        return ""
     try:
-        return str(int(x))
+        return str(int(float(x)))
     except:
         return ""
 
@@ -85,44 +91,46 @@ for col in ["Fecha de Expediente", "Fecha Pase DGTFM",
         df[col] = df[col].apply(try_parse_fecha)
 
 # ---------------------------------------------------
-# 5. CÁLCULO DE DÍAS HÁBILES
+# 5. CALCULAR DÍAS HÁBILES
 # ---------------------------------------------------
-def compute_business_days(start_date, end_date):
-    """Cuenta días hábiles (lunes–viernes)."""
-    if start_date is None:
+def dias_habiles(fecha_inicio, fecha_fin):
+    """Cuenta días hábiles (sin sábados ni domingos)."""
+    if fecha_inicio is None or fecha_fin is None:
         return ""
 
-    start = start_date.date()
-    end = end_date.date() if end_date else date.today()
-
-    if end < start:
+    if fecha_fin < fecha_inicio:
         return ""
 
-    total = 0
-    current = start
-    while current <= end:
-        if current.weekday() < 5:  # 0=Lunes ... 4=Viernes
-            total += 1
-        current += timedelta(days=1)
+    dias = 0
+    actual = fecha_inicio
 
-    return total - 1  # no contar el día inicial
+    while actual <= fecha_fin:
+        if actual.weekday() < 5:  # 0–4 = lunes a viernes
+            dias += 1
+        actual += timedelta(days=1)
+
+    return dias - 1  # no contar el mismo día como avanzado
+
 
 def compute_days_safe(f_exp, f_pase):
     fexp = try_parse_fecha(f_exp)
-    fp = try_parse_fecha(f_pase)
-    return compute_business_days(fexp, fp)
+    if fexp is None:
+        return ""
 
-# Cálculo inicial
+    if f_pase is None:
+        f_pase = datetime.combine(date.today(), time.min)
+
+    f_pase = try_parse_fecha(f_pase)
+    return dias_habiles(fexp.date(), f_pase.date())
+
 df["Días restantes"] = df.apply(
-    lambda r: compute_days_safe(
-        r.get("Fecha de Expediente"),
-        r.get("Fecha Pase DGTFM")
-    ),
+    lambda r: compute_days_safe(r.get("Fecha de Expediente"),
+                                r.get("Fecha Pase DGTFM")),
     axis=1
 )
 
 # ---------------------------------------------------
-# 6. GUARDADO AUTOMÁTICO A GOOGLE SHEETS
+# 6. GUARDAR AUTOMÁTICAMENTE LOS CÁLCULOS
 # ---------------------------------------------------
 df_write = df.copy()
 
@@ -145,19 +153,18 @@ worksheet.update(
 )
 
 # ---------------------------------------------------
-# 7. COLORES EN GOOGLE SHEETS
+# 7. APLICAR COLORES A GOOGLE SHEETS (COLUMNA D)
 # ---------------------------------------------------
 def apply_colors(ws, dfc):
     sheet_id = ws._properties["sheetId"]
     requests = []
-    col_idx = 3  # D = columna 4
+    col_idx = 3  # D
 
-    for i, v in enumerate(dfc["Días restantes"]):
-        try:
-            v = int(v)
-        except:
+    for i, value in enumerate(dfc["Días restantes"]):
+        if is_nat(value):
             color = {"red": 1, "green": 1, "blue": 1}
         else:
+            v = int(value)
             if v >= 6:
                 color = {"red": 1, "green": 0, "blue": 0}
             elif 4 <= v <= 5:
@@ -185,7 +192,7 @@ def apply_colors(ws, dfc):
 apply_colors(worksheet, df_write)
 
 # ---------------------------------------------------
-# 8. ACCESO POR DEPENDENCIA
+# 8. SELECCIÓN DE DEPENDENCIA
 # ---------------------------------------------------
 dependencias = sorted(df["Dependencia"].dropna().unique())
 sede = st.sidebar.selectbox("Seleccione dependencia", dependencias)
@@ -198,37 +205,20 @@ if clave != CLAVES.get(sede, ""):
     st.stop()
 
 # ---------------------------------------------------
-# 9. TOOLTIP — DÍAS HÁBILES
-# ---------------------------------------------------
-with st.sidebar.expander("ℹ️ ¿Cómo se cuentan los días hábiles?"):
-    st.markdown("""
-    **Regla aplicada:**
-    - Solo se cuentan los **días lunes a viernes**
-    - No se consideran sábados
-    - No se consideran domingos
-    - No se consideran feriados
-    - Cálculo estrictamente por fecha (dd/mm/yyyy)
-    """)
-
-# ---------------------------------------------------
-# 10. FILTRO FINAL
+# 9. FILTRO FINAL: SOLO SIN FECHA DE PASE DGTFM
 # ---------------------------------------------------
 df_pen = df[
     (df["Dependencia"].str.upper() == sede.upper()) &
     (df["Estado Trámite"].str.upper() == "PENDIENTE") &
-    (df["Fecha Pase DGTFM"].apply(is_nat))
+    (df["Fecha Pase DGTFM"].apply(lambda x: is_nat(x)))
 ]
 
-df_pen["Días restantes"] = df_pen.apply(
-    lambda r: compute_days_safe(
-        r.get("Fecha de Expediente"),
-        r.get("Fecha Pase DGTFM")
-    ),
-    axis=1
-)
+if df_pen.empty:
+    st.info("No hay expedientes pendientes.")
+    st.stop()
 
 # ---------------------------------------------------
-# 11. LEYENDA + TOTALES
+# 10. LEYENDA + TOTALES
 # ---------------------------------------------------
 st.sidebar.markdown("### 🟦 Leyenda de colores")
 
@@ -236,35 +226,29 @@ c_rojo = sum(df_pen["Días restantes"] >= 6)
 c_amar = sum((df_pen["Días restantes"] >= 4) & (df_pen["Días restantes"] <= 5))
 c_verde = sum(df_pen["Días restantes"] < 4)
 
-st.sidebar.markdown(f"🟥 **≥ 6 días**: {c_rojo}")
-st.sidebar.markdown(f"🟨 **4–5 días**: {c_amar}")
-st.sidebar.markdown(f"🟩 **< 4 días**: {c_verde}")
+st.sidebar.markdown(f"🟥 **Fuera del plazo de remisión (≥ 6 días)**: {c_rojo}")
+st.sidebar.markdown(f"🟨 **Por vencer plazo (4–5 días)**: {c_amar}")
+st.sidebar.markdown(f"🟩 **Dentro del plazo (< 4 días)**: {c_verde}")
+
+st.sidebar.markdown("""
+**Interpretación de colores**
+
+Los colores representan el nivel de antigüedad del trámite según los **días transcurridos (hábiles)**:
+
+- 🟩 *Dentro del plazo*: menos de 4 días hábiles  
+- 🟨 *Por vencer plazo de remisión*: entre 4 y 5 días hábiles  
+- 🟥 *Fuera del plazo de remisión*: desde 6 días hábiles en adelante  
+""")
+
+# Tooltip explicativo
+with st.sidebar.expander("¿Cómo se cuentan los días hábiles?"):
+    st.write("""
+Se contabilizan únicamente **lunes a viernes**.  
+No se consideran sábados ni domingos.
+""")
 
 # ---------------------------------------------------
-# 12. CSS PARA COLOREAR EXPANDERS
-# ---------------------------------------------------
-st.markdown("""
-<style>
-.exp-rojo {
-    background-color: rgba(255, 80, 80, 0.30);
-    padding: 10px;
-    border-radius: 8px;
-}
-.exp-amarillo {
-    background-color: rgba(255, 255, 120, 0.40);
-    padding: 10px;
-    border-radius: 8px;
-}
-.exp-verde {
-    background-color: rgba(120, 255, 120, 0.35);
-    padding: 10px;
-    border-radius: 8px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# ---------------------------------------------------
-# 13. MOSTRAR Y ACTUALIZAR
+# 11. MOSTRAR Y ACTUALIZAR
 # ---------------------------------------------------
 st.subheader("Expedientes pendientes")
 
@@ -272,30 +256,23 @@ def safe_widget_date(x):
     x = try_parse_fecha(x)
     return x.date() if x else date.today()
 
+def color_for_value(n):
+    if n >= 6:
+        return "red"
+    elif 4 <= n <= 5:
+        return "yellow"
+    else:
+        return "green"
+
 for idx, row in df_pen.iterrows():
 
     num = row.get("Número de Expediente", "")
-    dias_val = compute_days_safe(
-        row.get("Fecha de Expediente"),
-        row.get("Fecha Pase DGTFM")
-    )
-
-    if dias_val == "" or dias_val is None:
-        css_class = "exp-verde"
-    elif dias_val >= 6:
-        css_class = "exp-rojo"
-    elif 4 <= dias_val <= 5:
-        css_class = "exp-amarillo"
-    else:
-        css_class = "exp-verde"
 
     with st.expander(f"Expediente {num}"):
 
-        st.markdown(f"<div class='{css_class}'>", unsafe_allow_html=True)
-
-        fexp = row.get("Fecha de Expediente")
-        st.write("**Fecha de expediente:** ",
-                 fexp.strftime("%d/%m/%Y") if fexp else "---")
+        # Mostrar fecha de expediente
+        fexp = try_parse_fecha(row.get("Fecha de Expediente"))
+        st.markdown(f"**Fecha de Expediente:** {fexp.strftime('%d/%m/%Y')}")
 
         default_date = safe_widget_date(row.get("Fecha Pase DGTFM"))
 
@@ -305,17 +282,27 @@ for idx, row in df_pen.iterrows():
             key=f"fp_{idx}"
         )
 
-        # Mostrar días transcurridos
-        st.write(f"**Días transcurridos (hábiles):** {dias_val}")
+        dias_calc = compute_days_safe(
+            row.get("Fecha de Expediente"),
+            datetime.combine(fecha_pase, time.min)
+        )
 
-        # GUARDAR
+        # Color en presentación
+        color = color_for_value(dias_calc)
+
+        st.markdown(
+            f"<div style='padding:8px;border-radius:6px;background-color:{color};color:black;font-weight:bold;width:250px;'>"
+            f"Días transcurridos (hábiles): {dias_calc}"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
         if st.button("Guardar", key=f"save_{idx}"):
 
             nueva = datetime.combine(fecha_pase, time.min)
+
             df.at[idx, "Fecha Pase DGTFM"] = nueva
-            df.at[idx, "Días restantes"] = compute_days_safe(
-                row.get("Fecha de Expediente"), nueva
-            )
+            df.at[idx, "Días restantes"] = dias_calc
 
             df2 = df.copy()
 
@@ -336,6 +323,3 @@ for idx, row in df_pen.iterrows():
             apply_colors(worksheet, df2)
 
             st.success("Expediente actualizado correctamente.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
