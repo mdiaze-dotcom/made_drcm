@@ -87,7 +87,7 @@ for col in ["Fecha de Expediente", "Fecha Pase DGTFM",
         df[col] = df[col].apply(try_parse_fecha)
 
 # ---------------------------------------------------
-# 5. CALCULAR DÍAS HÁBILES
+# 5. CÁLCULO DE DÍAS HÁBILES
 # ---------------------------------------------------
 def dias_habiles(fecha_ini, fecha_fin):
     if fecha_ini is None or fecha_fin is None:
@@ -99,8 +99,9 @@ def dias_habiles(fecha_ini, fecha_fin):
     dias = 0
     for i in range(delta.days + 1):
         dia = f1 + timedelta(days=i)
-        if dia.weekday() < 5:  # lunes=0 ... viernes=4
+        if dia.weekday() < 5:  # lunes–viernes
             dias += 1
+
     return max(dias - 1, 0)
 
 def compute_days_safe(f_exp, f_pase):
@@ -108,7 +109,6 @@ def compute_days_safe(f_exp, f_pase):
     if fe is None:
         return ""
     fp = try_parse_fecha(f_pase)
-
     if fp is None:
         fp = datetime.combine(date.today(), time.min)
 
@@ -121,7 +121,7 @@ df["Días restantes"] = df.apply(
 )
 
 # ---------------------------------------------------
-# 6. GUARDAR AUTOMÁTICO
+# 6. ESCRITURA AUTOMÁTICA
 # ---------------------------------------------------
 df_write = df.copy()
 
@@ -144,12 +144,12 @@ worksheet.update(
 )
 
 # ---------------------------------------------------
-# 7. APLICAR COLORES A SHEET (SEMÁFORO)
+# 7. COLORES EN GOOGLE SHEETS
 # ---------------------------------------------------
 def apply_colors(ws, dfc):
     sheet_id = ws._properties["sheetId"]
     requests = []
-    col_idx = 3  # D=3
+    col_idx = 3  # columna D
 
     dias_list = dfc["Días restantes"].tolist()
 
@@ -198,12 +198,14 @@ if clave != CLAVES.get(sede, ""):
     st.stop()
 
 # ---------------------------------------------------
-# 9. LEYENDA + TOTALES POR COLOR
+# 9. LEYENDA + TOTALES
 # ---------------------------------------------------
 st.sidebar.markdown("### Leyenda de colores")
-st.sidebar.markdown("- 🟩 **Verde**: Dentro del plazo  
-- 🟨 **Amarillo**: Próximo a vencer  
-- 🟥 **Rojo**: Fuera del plazo")
+st.sidebar.markdown(
+    """🟩 **Verde**: Dentro del plazo  
+🟨 **Amarillo**: Próximo a vencer  
+🟥 **Rojo**: Fuera del plazo"""
+)
 
 df_sede = df[df["Dependencia"].str.upper() == sede.upper()]
 
@@ -227,7 +229,7 @@ with st.sidebar.expander("ℹ ¿Cómo se calculan los días hábiles?"):
     """)
 
 # ---------------------------------------------------
-# 11. FILTRO FINAL (SOLO SIN FECHA PASE DGTFM)
+# 11. FILTRO: SOLO SIN FECHA PASE DGTFM
 # ---------------------------------------------------
 def fecha_vacia(x):
     return is_nat(x)
@@ -243,7 +245,7 @@ if df_pen.empty:
     st.stop()
 
 # ---------------------------------------------------
-# 12. PRESENTACIÓN Y ACTUALIZACIÓN
+# 12. MOSTRAR Y ACTUALIZAR
 # ---------------------------------------------------
 st.subheader("Expedientes pendientes")
 
@@ -271,7 +273,7 @@ for idx, row in df_pen.iterrows():
             key=f"fp_{idx}"
         )
 
-        # Regla: no permitir fechas anteriores a hoy
+        # Validación: fecha mínima hoy
         if fecha_pase < date.today():
             st.error("❌ La fecha Pase DGTFM no puede ser menor que la fecha actual.")
             st.stop()
@@ -297,9 +299,11 @@ for idx, row in df_pen.iterrows():
             )
 
             df2 = df.copy()
+
             for col in ["Fecha de Expediente", "Fecha Pase DGTFM",
                         "Fecha Inicio de Etapa", "Fecha Fin de Etapa"]:
                 df2[col] = df2[col].apply(fmt_fecha_sheet)
+
             df2["Días restantes"] = df2["Días restantes"].apply(fmt_days_sheet)
 
             df_out2 = df2[header].fillna("").astype(str)
