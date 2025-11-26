@@ -46,6 +46,7 @@ def is_nat(x):
     s = str(x).strip().upper()
     return s in ("", "NONE", "NAN", "NAT")
 
+
 def try_parse_fecha(x):
     if is_nat(x):
         return None
@@ -64,11 +65,13 @@ def try_parse_fecha(x):
     except:
         return None
 
+
 def fmt_fecha_sheet(x):
     x = try_parse_fecha(x)
     if x is None:
         return ""
     return x.strftime("%d/%m/%Y %H:%M:%S")
+
 
 def fmt_days_sheet(x):
     if is_nat(x):
@@ -77,6 +80,7 @@ def fmt_days_sheet(x):
         return str(int(float(x)))
     except:
         return ""
+
 
 # ---------------------------------------------------
 # 4. NORMALIZAR FECHAS
@@ -87,15 +91,17 @@ for col in ["Fecha de Expediente", "Fecha Pase DRCM",
         df[col] = df[col].apply(try_parse_fecha)
 
 # ---------------------------------------------------
-# 5. CALCULAR DÍAS RESTANTES (SIN HORAS)
+# 5. CALCULAR DÍAS TRANS­CURRIDOS (FUNCIÓN CORREGIDA)
 # ---------------------------------------------------
 def compute_days_safe(f_exp, f_pase):
     fexp = try_parse_fecha(f_exp)
     if fexp is None:
         return ""
 
+    # Asegurar que siempre use solo fecha
     fexp = fexp.date()
 
+    # Si no hay fecha pase → hoy
     if is_nat(f_pase):
         return (date.today() - fexp).days
 
@@ -103,7 +109,12 @@ def compute_days_safe(f_exp, f_pase):
     if fp is None:
         return (date.today() - fexp).days
 
-    return (fp.date() - fexp.date()).days
+    # Convertir también a date
+    fp = fp.date()
+
+    # Diferencia final
+    return (fp - fexp).days
+
 
 df["Días restantes"] = df.apply(
     lambda r: compute_days_safe(r.get("Fecha de Expediente"),
@@ -173,6 +184,7 @@ def apply_colors(ws, dfc):
 
     if requests:
         ws.spreadsheet.batch_update({"requests": requests})
+
 
 apply_colors(worksheet, df_write)
 
@@ -299,9 +311,3 @@ for idx, row in df_pen.iterrows():
             apply_colors(worksheet, df2)
 
             st.success("Expediente actualizado correctamente.")
-
-
-
-
-
-
