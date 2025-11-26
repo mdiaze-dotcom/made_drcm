@@ -36,7 +36,6 @@ df = pd.DataFrame(records)
 # 3. FUNCIONES BLINDADAS DE FECHA
 # ---------------------------------------------------
 def is_nat(x):
-    """True si x es NaT/None/vacío/NaN."""
     if x is None:
         return True
     try:
@@ -48,7 +47,6 @@ def is_nat(x):
     return s in ("", "NONE", "NAN", "NAT")
 
 def try_parse_fecha(x):
-    """Convierte a datetime o devuelve None sin fallar nunca."""
     if is_nat(x):
         return None
     if isinstance(x, datetime):
@@ -67,14 +65,12 @@ def try_parse_fecha(x):
         return None
 
 def fmt_fecha_sheet(x):
-    """Convierte datetime a dd/mm/YYYY HH:MM:SS o ''."""
     x = try_parse_fecha(x)
     if x is None:
         return ""
     return x.strftime("%d/%m/%Y %H:%M:%S")
 
 def fmt_days_sheet(x):
-    """Convierte a entero-string o ''. Nunca falla."""
     if is_nat(x):
         return ""
     try:
@@ -91,23 +87,23 @@ for col in ["Fecha de Expediente", "Fecha Pase DRCM",
         df[col] = df[col].apply(try_parse_fecha)
 
 # ---------------------------------------------------
-# 5. CALCULAR DÍAS RESTANTES
+# 5. CALCULAR DÍAS RESTANTES (SIN HORAS)
 # ---------------------------------------------------
 def compute_days_safe(f_exp, f_pase):
-    fe = try_parse_fecha(f_exp)
-    if fe is None:
+    fexp = try_parse_fecha(f_exp)
+    if fexp is None:
         return ""
+
+    fexp = fexp.date()
+
+    if is_nat(f_pase):
+        return (date.today() - fexp).days
+
     fp = try_parse_fecha(f_pase)
-
     if fp is None:
-        delta = datetime.combine(date.today(), time.min) - fe
-    else:
-        delta = fp - fe
+        return (date.today() - fexp).days
 
-    try:
-        return int(delta.days)
-    except:
-        return ""
+    return (fp.date() - fexp.date()).days
 
 df["Días restantes"] = df.apply(
     lambda r: compute_days_safe(r.get("Fecha de Expediente"),
@@ -120,7 +116,6 @@ df["Días restantes"] = df.apply(
 # ---------------------------------------------------
 df_write = df.copy()
 
-# fechas formateadas
 for col in ["Fecha de Expediente", "Fecha Pase DRCM",
             "Fecha Inicio de Etapa", "Fecha Fin de Etapa"]:
     if col in df_write.columns:
@@ -146,7 +141,7 @@ worksheet.update(
 def apply_colors(ws, dfc):
     sheet_id = ws._properties["sheetId"]
     requests = []
-    col_idx = 3  # D = 3
+    col_idx = 3
 
     dias_list = dfc["Días restantes"].tolist()
 
@@ -195,7 +190,7 @@ if clave != CLAVES.get(sede, ""):
     st.stop()
 
 # ---------------------------------------------------
-# 9. FILTRO FINAL (NUEVA REGLA)
+# 9. FILTRO FINAL
 # ---------------------------------------------------
 def fecha_vacia(x):
     return is_nat(x)
@@ -203,7 +198,7 @@ def fecha_vacia(x):
 df_pen = df[
     (df["Dependencia"].str.upper() == sede.upper()) &
     (df["Estado Trámite"].str.upper() == "PENDIENTE") &
-    (df["Fecha Pase DRCM"].apply(fecha_vacia))  # ← NUEVA REGLA
+    (df["Fecha Pase DRCM"].apply(fecha_vacia))
 ]
 
 if df_pen.empty:
@@ -211,37 +206,75 @@ if df_pen.empty:
     st.stop()
 
 # ---------------------------------------------------
-# 10. MOSTRAR Y ACTUALIZAR
+# 10. MOSTRAR Y ACTUALIZAR (CON TEXTO Y COLOR NUEVO)
 # ---------------------------------------------------
 st.subheader("Expedientes pendientes")
 
 def safe_widget_date(x):
-    x = try_parse_fecha(x)
-    return x.date() if x else date.today()
+    dt = try_parse_fecha(x)
+    return dt.date() if dt else date.today()
 
 for idx, row in df_pen.iterrows():
 
     num = row.get("Número de Expediente", "")
     with st.expander(f"Expediente {num}"):
 
+        # Mostrar fecha expediente
+        fecha_exp_txt = ""
+        fe = try_parse_fecha(row.get("Fecha de Expediente"))
+        if fe:
+            fecha_exp_txt = fe.strftime("%d/%m/%Y")
+        st.write(f"📌 **Fecha de Expediente:** {fecha_exp_txt}")
+
         default_date = safe_widget_date(row.get("Fecha Pase DRCM"))
 
         fecha_pase = st.date_input(
-            "Fecha Pase DRCM",
+            "Fecha Pase DRCM (no puede ser menor que hoy)",
             value=default_date,
             key=f"fp_{idx}"
         )
+
+        if fecha_pase < date.today():
+            st.error("❌ La fecha no puede ser menor que hoy.")
+            continue
 
         dias_calc = compute_days_safe(
             row.get("Fecha de Expediente"),
             datetime.combine(fecha_pase, time.min)
         )
 
-        st.write(f"Días restantes: {dias_calc}")
+        # Determinar color
+        if dias_calc == "" or dias_calc is None:
+            color_hex = "#FFFFFF"
+        else:
+            try:
+                v = int(dias_calc)
+                if v >= 6:
+                    color_hex = "#FF0000"
+                elif 4 <= v <= 5:
+                    color_hex = "#FFFF00"
+                else:
+                    color_hex = "#00FF00"
+            except:
+                color_hex = "#FFFFFF"
+
+        # Mostrar con estilo
+        st.markdown(
+            f"""
+            <div style="padding:8px; font-size:16px; 
+                        background-color:{color_hex};
+                        width: fit-content; 
+                        border-radius:5px;">
+                <strong>Días transcurridos desde la recepción del trámite:</strong> {dias_calc}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
         if st.button("Guardar", key=f"save_{idx}"):
 
             nueva = datetime.combine(fecha_pase, time.min)
+
             df.at[idx, "Fecha Pase DRCM"] = nueva
             df.at[idx, "Días restantes"] = compute_days_safe(
                 row.get("Fecha de Expediente"), nueva
@@ -266,6 +299,7 @@ for idx, row in df_pen.iterrows():
             apply_colors(worksheet, df2)
 
             st.success("Expediente actualizado correctamente.")
+
 
 
 
