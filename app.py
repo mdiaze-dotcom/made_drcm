@@ -257,7 +257,13 @@ def color_text(v):
 
 for idx, row in df_pen.iterrows():
     num = row.get("Número de Expediente", "")
-    with st.expander(f"Expediente {num}"):
+
+    # Nueva línea: obtener fecha de expediente para mostrarla
+    fexp = row.get("Fecha de Expediente")
+    fexp_txt = fexp.strftime("%d/%m/%Y") if isinstance(fexp, datetime) else ""
+
+    # Mostrar en el título del expander
+    with st.expander(f"Expediente {num} — Fecha: {fexp_txt}"):
 
         default_date = safe_widget_date(row.get("Fecha Pase DGTFM"))
 
@@ -267,7 +273,6 @@ for idx, row in df_pen.iterrows():
             key=f"fp_{idx}"
         )
 
-        # Validación: fecha mínima hoy
         if fecha_pase < date.today():
             st.error("❌ La fecha Pase DGTFM no puede ser menor que la fecha actual.")
             st.stop()
@@ -311,3 +316,4 @@ for idx, row in df_pen.iterrows():
             apply_colors(worksheet, df2)
 
             st.success("Expediente actualizado correctamente.")
+
