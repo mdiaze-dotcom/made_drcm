@@ -197,6 +197,16 @@ if clave != CLAVES.get(sede, ""):
     st.warning("Clave incorrecta.")
     st.stop()
 
+# -------------------------------
+# TÍTULO PRINCIPAL GRANDE
+# -------------------------------
+st.markdown(
+    "<h1 style='text-align:center; font-size:38px; margin-top:-10px;'>"
+    "TRÁMITES DE NACIONALIZACIÓN"
+    "</h1>",
+    unsafe_allow_html=True
+)
+
 # ---------------------------------------------------
 # 9. LEYENDA + TOTALES
 # ---------------------------------------------------
