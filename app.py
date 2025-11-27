@@ -200,12 +200,6 @@ if clave != CLAVES.get(sede, ""):
 # ---------------------------------------------------
 # 9. LEYENDA + TOTALES
 # ---------------------------------------------------
-st.sidebar.markdown("### Leyenda de colores")
-st.sidebar.markdown(
-    """🟩 **Verde**: Dentro del plazo  
-🟨 **Amarillo**: Próximo a vencer  
-🟥 **Rojo**: Fuera del plazo"""
-)
 
 df_sede = df[df["Dependencia"].str.upper() == sede.upper()]
 
@@ -214,9 +208,9 @@ amar = sum((df_sede["Días restantes"].astype(float) >= 4) &
            (df_sede["Días restantes"].astype(float) <= 5))
 rojo = sum(df_sede["Días restantes"].astype(float) >= 6)
 
-st.sidebar.write(f"🟩 Verde: **{verde}**")
-st.sidebar.write(f"🟨 Amarillo: **{amar}**")
-st.sidebar.write(f"🟥 Rojo: **{rojo}**")
+st.sidebar.write(f"🟩 Verde: **{verde}**: Dentro del plazo ")
+st.sidebar.write(f"🟨 Amarillo: **{amar}**: Próximo a vencer")
+st.sidebar.write(f"🟥 Rojo: **{rojo}**: Fuera del plazo")
 
 # ---------------------------------------------------
 # 10. TOOLTIP
